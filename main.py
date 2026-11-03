@@ -6,10 +6,11 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 import config
+import gdb
 import night
 import state
 from db import DB
-from handlers import moderation, protection, rp, settings, social, start
+from handlers import ai, economy, family, moderation, protection, rp, settings, social, start
 from keepalive import pinger, start_web
 from utils import spawn
 
@@ -23,6 +24,7 @@ async def main():
 
     state.db = DB(config.DB_PATH)
     await state.db.init()
+    await gdb.init()
 
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     me = await bot.get_me()
@@ -36,7 +38,7 @@ async def main():
     dp.edited_message.outer_middleware(protection.Guard(count=False))
 
     # Порядок важен: сначала команды, потом РП и общая обработка
-    for module in (start, moderation, settings, social, rp, protection):
+    for module in (start, moderation, settings, social, economy, family, rp, protection, ai):
         dp.include_router(module.router)
 
     @dp.errors()
@@ -48,6 +50,7 @@ async def main():
     spawn(pinger())
     spawn(state.db.flusher())
     spawn(night.loop(bot))
+    spawn(family.loop(bot))
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=["message", "edited_message", "callback_query"])

@@ -21,6 +21,16 @@ PORT = int(os.getenv("PORT", "10000"))
 PUBLIC_URL = (os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PUBLIC_URL") or "").rstrip("/")
 PING_INTERVAL = int(os.getenv("PING_INTERVAL", "240"))  # сек; Render усыпляет через 15 мин
 
+# --- ИИ (Google Gemini) ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+# BLOCK_NONE | BLOCK_ONLY_HIGH | BLOCK_MEDIUM_AND_ABOVE | BLOCK_LOW_AND_ABOVE
+GEMINI_SAFETY = os.getenv("GEMINI_SAFETY", "BLOCK_ONLY_HIGH").strip()
+AI_NAME = os.getenv("AI_NAME", "Мия").strip()
+
+# --- Семья: сколько часов длится беременность (в реальном времени) ---
+PREG_HOURS = float(os.getenv("PREG_HOURS", "6"))
+
 # Часовой пояс для ночного режима (смещение от UTC, по умолчанию Москва)
 TZ_OFFSET = int(os.getenv("TZ_OFFSET", "3"))
 
@@ -52,6 +62,9 @@ DEFAULTS = {
     "del_service": True,
     "rp": True,
     "rp18": False,
+    "games": True,   # экономика и казино
+    "family": True,  # отношения, дети, беременность
+    "ai": True,      # ИИ-собеседник
     # ночной режим
     "night": False,
     "night_start": "23:00",
