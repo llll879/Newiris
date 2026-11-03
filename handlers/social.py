@@ -5,6 +5,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import gdb
 import state
 from filters import Cmd
 from utils import (
@@ -51,6 +52,9 @@ async def cmd_profile(m: Message, args: list):
         lines.append(f"💍 В браке с {await name_of(m.chat.id, partner)} (с {fmt_date(mar['since'])})")
     if row:
         lines.append(f"📅 Впервые замечен: {fmt_date(row['first_seen'])}")
+    if s.get("games", True) or s.get("family", True):
+        from handlers.family import profile_lines
+        lines += await profile_lines(m.chat.id, t.id)
     await m.answer("\n".join(lines))
 
 
@@ -116,7 +120,7 @@ async def cmd_nick(m: Message, arg: str):
 
 
 # ---------- браки ----------
-@router.message(Cmd("marry", "брак", "пожениться", "свадьба"), GROUP)
+@router.message(Cmd("marry", "брак", "пожениться", "свадьба", "жениться", "замуж"), GROUP)
 async def cmd_marry(m: Message, args: list):
     if not m.from_user:
         return
@@ -161,7 +165,12 @@ async def cb_marry(cb: CallbackQuery):
         await cb.message.edit_text("💔 Кто-то из вас уже в браке.")
         return await cb.answer()
     await db.marry(chat_id, a, b)
-    await cb.message.edit_text(f"💒 {await name_of(chat_id, a)} и {await name_of(chat_id, b)} теперь пара! Совет да любовь! 🎉")
+    await gdb.make_pair(chat_id, a, b)
+    await gdb.add_money(chat_id, a, 2000)
+    await gdb.add_money(chat_id, b, 2000)
+    await cb.message.edit_text(f"💒 {await name_of(chat_id, a)} и {await name_of(chat_id, b)} теперь в браке! "
+                               f"Совет да любовь! 🎉\n🎁 Свадебный подарок: по 2 000 💰 каждому. "
+                               f"Семья: <code>семья</code> · дети: <code>завести ребёнка</code>")
     await cb.answer()
 
 
@@ -174,6 +183,7 @@ async def cmd_divorce(m: Message):
         return await m.reply("Ты не в браке.")
     partner = mar["u2"] if mar["u1"] == m.from_user.id else mar["u1"]
     await state.db.divorce(m.chat.id, m.from_user.id)
+    await gdb.break_pair(m.chat.id, m.from_user.id)
     await m.answer(f"💔 {await name_of(m.chat.id, m.from_user.id)} и {await name_of(m.chat.id, partner)} разводятся.")
 
 
