@@ -16,7 +16,7 @@ class GeminiError(Exception):
 
 
 async def ask(system: str, history: list[tuple[str, str]], user_text: str,
-              temperature: float = 1.0, max_tokens: int = 700) -> str | None:
+              temperature: float = 0.95, max_tokens: int = 700) -> str | None:
     """history — [(role, text)], role: 'user' | 'model'. None — ответ заблокирован фильтром."""
     if not config.GEMINI_API_KEY:
         raise GeminiError("no_key")
