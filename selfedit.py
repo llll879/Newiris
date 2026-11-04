@@ -20,12 +20,14 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 log = logging.getLogger("selfedit")
 
@@ -144,6 +146,126 @@ def _set_state(rel: str, content: str | None, base: dict):
         ov.write_bytes(content.encode("utf-8"))
 
 
+# ====================== хранение в PostgreSQL (Neon) ======================
+# Если задан DATABASE_URL, папка data/selfedit зеркалируется в таблицу selfedit_files:
+# на Render диск временный, а правки кода, история и настройки ИИ должны переживать деплой.
+_TABLE = "CREATE TABLE IF NOT EXISTS selfedit_files(path TEXT PRIMARY KEY, content TEXT NOT NULL, ts BIGINT)"
+_synced: dict = {}   # путь -> sha последней выгруженной/загруженной версии
+
+
+def clean_dsn(url: str) -> str:
+    """Приводит строку подключения (в т.ч. скопированную как `psql '...'`) к виду, понятному asyncpg."""
+    m = re.search(r"postgres(?:ql)?://[^\s'\"]+", url or "")
+    if not m:
+        raise ValueError("DATABASE_URL должен начинаться с postgresql://")
+    u = urlsplit(m.group(0).replace("postgres://", "postgresql://", 1))
+    # asyncpg не знает эти параметры из строки Neon и принял бы их за настройки сервера
+    drop = {"channel_binding", "pgbouncer", "connect_timeout", "options"}
+    q = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True) if k not in drop]
+    if not any(k == "sslmode" for k, _ in q) and (u.hostname or "").endswith("neon.tech"):
+        q.append(("sslmode", "require"))
+    return urlunsplit((u.scheme, u.netloc, u.path, urlencode(q), ""))
+
+
+def _dsn() -> str | None:
+    url = os.getenv("DATABASE_URL", "").strip()
+    try:
+        return clean_dsn(url) if url else None
+    except ValueError:
+        return None
+
+
+def _scan() -> dict:
+    out = {}
+    if DATA.exists():
+        for f in DATA.rglob("*"):
+            if f.is_file() and not f.name.endswith(".tmp"):
+                b = f.read_bytes()
+                out[f.relative_to(DATA).as_posix()] = (hashlib.sha1(b).hexdigest(), b.decode("utf-8", "replace"))
+    return out
+
+
+def _pull():
+    """Перед запуском: если в БД уже есть сохранённые правки, они главнее локальной папки."""
+    dsn = _dsn()
+    if not dsn:
+        return
+    try:
+        import asyncpg
+
+        async def go():
+            conn = await asyncpg.connect(dsn, statement_cache_size=0, timeout=60)
+            try:
+                await conn.execute(_TABLE)
+                return await conn.fetch("SELECT path, content FROM selfedit_files")
+            finally:
+                await conn.close()
+
+        rows = asyncio.run(go())
+    except Exception as e:  # noqa: BLE001  — без БД работаем с локальными файлами
+        print(f"selfedit: не удалось загрузить правки из БД: {e}", file=sys.stderr)
+        return
+    if not rows:
+        return  # БД пуста: локальное (если есть) выгрузит mirror_loop
+    shutil.rmtree(DATA, ignore_errors=True)
+    _synced.clear()
+    for r in rows:
+        rel = r["path"]
+        if ".." in Path(rel).parts or Path(rel).is_absolute():
+            continue
+        f = DATA / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(r["content"].encode("utf-8"))
+        _synced[rel] = hashlib.sha1(r["content"].encode("utf-8")).hexdigest()
+
+
+async def _push(dsn: str):
+    cur = _scan()
+    changed = {p: c for p, (sha, c) in cur.items() if _synced.get(p) != sha}
+    gone = [p for p in _synced if p not in cur]
+    if not changed and not gone:
+        return
+    import asyncpg
+    conn = await asyncpg.connect(dsn, statement_cache_size=0, timeout=60)
+    try:
+        await conn.execute(_TABLE)
+        async with conn.transaction():
+            for p, c in changed.items():
+                await conn.execute(
+                    "INSERT INTO selfedit_files(path, content, ts) VALUES($1, $2, $3) "
+                    "ON CONFLICT(path) DO UPDATE SET content=excluded.content, ts=excluded.ts",
+                    p, c, int(time.time()))
+            if gone:
+                await conn.execute("DELETE FROM selfedit_files WHERE path = ANY($1::text[])", gone)
+    finally:
+        await conn.close()
+    _synced.clear()
+    _synced.update({p: sha for p, (sha, _c) in cur.items()})
+
+
+async def mirror_loop(interval: int = 5):
+    """Фоновая выгрузка изменений в БД (сама ходит в сеть, только когда файлы изменились)."""
+    dsn = _dsn()
+    if not dsn:
+        return
+    log.info("Правки и настройки ИИ хранятся в PostgreSQL")
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await _push(dsn)
+        except Exception as e:  # noqa: BLE001
+            log.warning("selfedit: выгрузка в БД не удалась: %s", e)
+
+
+async def flush():
+    dsn = _dsn()
+    if dsn:
+        try:
+            await _push(dsn)
+        except Exception as e:  # noqa: BLE001
+            log.warning("selfedit: flush не удался: %s", e)
+
+
 # ====================== запуск: оверлей и сторож ======================
 _boot_ids: set = set()
 
@@ -151,6 +273,7 @@ _boot_ids: set = set()
 def boot_apply():
     """Вызывается из main.py до импорта остального кода."""
     try:
+        _pull()
         DATA.mkdir(parents=True, exist_ok=True)
         g = _guard()
         base = _jload(BASE_FILE, {})
@@ -230,6 +353,7 @@ async def restart():
             await state.db.conn.commit()
     except Exception:  # noqa: BLE001
         pass
+    await flush()
     await asyncio.sleep(1)
     sys.stdout.flush()
     sys.stderr.flush()

@@ -14,6 +14,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 # ID владельцев бота (через запятую). Имеют максимальный ранг во всех чатах.
 OWNER_IDS = _ids(os.getenv("OWNER_IDS", ""))
 DB_PATH = os.getenv("DB_PATH", "data/bot.db")
+# PostgreSQL (например, Neon). Если задана — вместо SQLite используется она, DB_PATH игнорируется.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 # --- Render / будилка ---
 PORT = int(os.getenv("PORT", "10000"))
@@ -65,6 +67,8 @@ DEFAULTS = {
     "games": True,   # экономика и казино
     "family": True,  # отношения, дети, беременность
     "ai": True,      # ИИ-собеседник
+    "web": True,     # интернет: поиск, новости, погода, курсы, пересказ ссылок
+    "recap": False,  # пересказ чата (бот хранит последние сообщения в памяти)
     # ночной режим
     "night": False,
     "night_start": "23:00",

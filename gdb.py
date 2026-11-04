@@ -50,7 +50,7 @@ async def init():
 # ---------- деньги ----------
 async def wallet(chat: int, uid: int):
     db = state.db
-    await db.conn.execute("INSERT OR IGNORE INTO wallet(chat_id,user_id) VALUES(?,?)", (chat, uid))
+    await db.conn.execute("INSERT INTO wallet(chat_id,user_id) VALUES(?,?) ON CONFLICT DO NOTHING", (chat, uid))
     return await db.q("SELECT * FROM wallet WHERE chat_id=? AND user_id=?", (chat, uid), one=True)
 
 
@@ -60,8 +60,8 @@ async def money(chat: int, uid: int) -> int:
 
 async def add_money(chat: int, uid: int, delta: int) -> int:
     await wallet(chat, uid)
-    await state.db.x("UPDATE wallet SET money=MAX(money+?,0) WHERE chat_id=? AND user_id=?",
-                     (delta, chat, uid))
+    await state.db.x("UPDATE wallet SET money=CASE WHEN money+?>0 THEN money+? ELSE 0 END "
+                     "WHERE chat_id=? AND user_id=?", (delta, delta, chat, uid))
     return await money(chat, uid)
 
 
@@ -109,7 +109,8 @@ async def asset(chat: int, uid: int, kind: str):
 
 
 async def set_asset(chat: int, uid: int, kind: str, idx: int):
-    await state.db.x("INSERT OR REPLACE INTO assets(chat_id,user_id,kind,idx) VALUES(?,?,?,?)",
+    await state.db.x("INSERT INTO assets(chat_id,user_id,kind,idx) VALUES(?,?,?,?) "
+                     "ON CONFLICT(chat_id,user_id,kind) DO UPDATE SET idx=excluded.idx",
                      (chat, uid, kind, idx))
 
 
@@ -120,13 +121,11 @@ async def del_asset(chat: int, uid: int, kind: str):
 
 # ---------- дети ----------
 async def add_kid(chat: int, p1: int, p2: int, name: str, gender: str) -> int:
-    cur = await state.db.conn.execute(
-        "INSERT INTO kids(chat_id,p1,p2,name,gender,born) VALUES(?,?,?,?,?,?)",
-        (chat, p1, p2, name, gender, int(time.time())))
-    kid_id = cur.lastrowid
-    await cur.close()
+    row = await state.db.q(
+        "INSERT INTO kids(chat_id,p1,p2,name,gender,born) VALUES(?,?,?,?,?,?) RETURNING id",
+        (chat, p1, p2, name, gender, int(time.time())), one=True)
     await state.db.conn.commit()
-    return kid_id
+    return row["id"]
 
 
 async def kids_of(chat: int, uid: int):
@@ -158,7 +157,7 @@ async def pair_of(chat: int, uid: int):
 async def make_pair(chat: int, a: int, b: int):
     u1, u2 = _pair_key(a, b)
     await state.db.x(
-        "INSERT OR IGNORE INTO rels(chat_id,u1,u2,kind,love,since) VALUES(?,?,?,'pair',0,?)",
+        "INSERT INTO rels(chat_id,u1,u2,kind,love,since) VALUES(?,?,?,'pair',0,?) ON CONFLICT DO NOTHING",
         (chat, u1, u2, int(time.time())))
 
 
@@ -195,7 +194,7 @@ async def partner_of(chat: int, uid: int):
 async def friend_add(chat: int, a: int, b: int):
     u1, u2 = _pair_key(a, b)
     await state.db.x(
-        "INSERT OR IGNORE INTO rels(chat_id,u1,u2,kind,since) VALUES(?,?,?,'friend',?)",
+        "INSERT INTO rels(chat_id,u1,u2,kind,since) VALUES(?,?,?,'friend',?) ON CONFLICT DO NOTHING",
         (chat, u1, u2, int(time.time())))
 
 
@@ -223,7 +222,7 @@ async def friends_of(chat: int, uid: int) -> list[int]:
 # ---------- ИИ ----------
 async def ai_get(uid: int):
     await state.db.conn.execute(
-        "INSERT OR IGNORE INTO ai_rel(user_id, since) VALUES(?,?)", (uid, int(time.time())))
+        "INSERT INTO ai_rel(user_id, since) VALUES(?,?) ON CONFLICT DO NOTHING", (uid, int(time.time())))
     return await state.db.q("SELECT * FROM ai_rel WHERE user_id=?", (uid,), one=True)
 
 

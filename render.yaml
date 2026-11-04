@@ -13,5 +13,7 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: DATABASE_URL   # строка подключения Neon; без неё бот работает на SQLite
+        sync: false
       - key: PYTHON_VERSION
         value: 3.12.7

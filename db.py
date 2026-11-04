@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS users(
     last_seen INTEGER,
     PRIMARY KEY(chat_id, user_id)
 );
-CREATE INDEX IF NOT EXISTS idx_users_username ON users(chat_id, username COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_users_lname ON users(chat_id, LOWER(username));
 CREATE TABLE IF NOT EXISTS warnlog(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id INTEGER, user_id INTEGER, by_id INTEGER, reason TEXT, ts INTEGER
@@ -140,7 +140,7 @@ class DB:
             "INSERT INTO users(chat_id,user_id,username,name,msgs,first_seen,last_seen) "
             "VALUES(?,?,?,?,1,?,?) "
             "ON CONFLICT(chat_id,user_id) DO UPDATE SET username=excluded.username, "
-            "name=excluded.name, msgs=msgs+1, last_seen=excluded.last_seen",
+            "name=excluded.name, msgs=users.msgs+1, last_seen=excluded.last_seen",
             (chat_id, user.id, user.username, user.full_name, now, now),
         )
 
@@ -152,7 +152,7 @@ class DB:
             "INSERT INTO users(chat_id,user_id,username,name,first_seen,last_seen) "
             "VALUES(?,?,?,?,?,?) "
             "ON CONFLICT(chat_id,user_id) DO UPDATE SET "
-            "username=COALESCE(excluded.username, username), name=excluded.name",
+            "username=COALESCE(excluded.username, users.username), name=excluded.name",
             (chat_id, t.id, t.username, t.name, now, now),
         )
 
@@ -163,7 +163,7 @@ class DB:
 
     async def find_username(self, chat_id: int, username: str):
         return await self.q(
-            "SELECT * FROM users WHERE chat_id=? AND username=? COLLATE NOCASE "
+            "SELECT * FROM users WHERE chat_id=? AND LOWER(username)=LOWER(?) "
             "ORDER BY last_seen DESC LIMIT 1",
             (chat_id, username),
             one=True,
@@ -183,7 +183,7 @@ class DB:
 
     async def dec_warn(self, chat_id, user_id) -> int:
         await self.x(
-            "UPDATE users SET warns=MAX(warns-1,0) WHERE chat_id=? AND user_id=?",
+            "UPDATE users SET warns=CASE WHEN warns>1 THEN warns-1 ELSE 0 END WHERE chat_id=? AND user_id=?",
             (chat_id, user_id),
         )
         row = await self.get_user(chat_id, user_id)
@@ -253,7 +253,7 @@ class DB:
         return self._words[chat_id]
 
     async def word_add(self, chat_id, word):
-        await self.x("INSERT OR IGNORE INTO words(chat_id,word) VALUES(?,?)", (chat_id, word))
+        await self.x("INSERT INTO words(chat_id,word) VALUES(?,?) ON CONFLICT DO NOTHING", (chat_id, word))
         (await self.words(chat_id)).add(word)
 
     async def word_del(self, chat_id, word) -> bool:
@@ -272,7 +272,8 @@ class DB:
     async def marry(self, chat_id, a, b):
         a, b = sorted((a, b))
         await self.x(
-            "INSERT OR REPLACE INTO marriages(chat_id,u1,u2,since) VALUES(?,?,?,?)",
+            "INSERT INTO marriages(chat_id,u1,u2,since) VALUES(?,?,?,?) "
+            "ON CONFLICT(chat_id,u1) DO UPDATE SET u2=excluded.u2, since=excluded.since",
             (chat_id, a, b, int(time.time())),
         )
 
