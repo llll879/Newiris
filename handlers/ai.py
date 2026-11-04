@@ -4,13 +4,15 @@ import time
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions,
+                           Message)
 
 import config
 import gdb
 import gemini
 import selfedit
 import state
+import web
 from handlers.economy import fm
 from utils import esc
 
@@ -55,15 +57,30 @@ RE_BREAK = re.compile(r"(?i)\b(давай|нам надо|пора)\b.*\b(рас
 
 _last: dict = {}
 
+# Когда просят что-то найти или узнать свежее, ИИ ходит в интернет (поиск Google через Gemini)
+RE_WEB = re.compile(
+    r"(?i)\b(найди|найти|поищи|погугли|загугли|в (интернете|инете|гугле|сети)|что нового|"
+    r"(последние|свежие) новости|что (там )?(случилось|происходит)|кто выиграл|когда выйдет|"
+    r"какая последняя версия|актуальн\w+ (цена|курс|версия))\b")
+
+
+async def web_allowed(m: Message) -> bool:
+    if m.chat.type != "private" and not (await state.db.settings(m.chat.id)).get("web", True):
+        return False
+    return web.budget_ok()
+
 
 def ai_name() -> str:
     """Имя ИИ: настройка владельца (режим разработчика) или переменная AI_NAME."""
     return selfedit.setting("ai_name") or config.AI_NAME
 
 
-def addressed(m: Message) -> str | None:
-    """Если сообщение адресовано ИИ — вернёт текст без обращения, иначе None."""
-    text = (m.text or "").strip()
+def addressed(m: Message, text: str | None = None) -> str | None:
+    """Если сообщение адресовано ИИ — вернёт текст без обращения, иначе None.
+
+    text — для подписи к фото (по умолчанию берётся m.text)."""
+    text = (m.text if text is None else text) or ""
+    text = text.strip()
     if not text or text.startswith("/"):
         return None
     if m.chat.type == "private":
@@ -258,6 +275,7 @@ async def on_ai(m: Message):
             note = "Собеседник решил расстаться. Отреагируй по-человечески: с грустью, но без драмы и давления."
 
     adult_ok = await can_adult(m, rel)
+    use_web = bool(RE_WEB.search(text)) and await web_allowed(m)
     scope = f"{m.chat.id}:{uid}"
     history = await gdb.hist_get(scope)
     while history and history[0][0] != "user":
@@ -265,8 +283,12 @@ async def on_ai(m: Message):
     user_msg = text if not note else f"{text}\n\n[системная пометка, собеседник её не видит: {note}]"
     try:
         await m.bot.send_chat_action(m.chat.id, "typing")
-        answer = await gemini.ask(system_prompt(rel, m.from_user.full_name, adult_ok, m.chat.type != "private"),
-                                  history, user_msg)
+        sys_prompt = system_prompt(rel, m.from_user.full_name, adult_ok, m.chat.type != "private")
+        if use_web:
+            web.budget_spend()
+            sys_prompt += web.PERSONA_WEB_NOTE
+        answer, sources = await gemini.ask_ex(sys_prompt, history, user_msg,
+                                              search=use_web, max_tokens=1500 if use_web else None)
     except gemini.GeminiError as e:
         msg = {"rate": "⏳ Слишком много запросов к ИИ, попробуй чуть позже.",
                "no_key": "🧠 ИИ не настроен (нет GEMINI_API_KEY)."}.get(str(e), "⚠️ ИИ сейчас недоступен, попробуй позже.")
@@ -281,6 +303,6 @@ async def on_ai(m: Message):
     if time.time() - rel["last_love"] >= LOVE_CD:
         await gdb.ai_set(uid, love=rel["love"] + 1, last_love=int(time.time()))
     try:
-        await m.reply(esc(answer))
+        await m.reply(web.with_sources(answer, sources), link_preview_options=LinkPreviewOptions(is_disabled=True))
     except TelegramAPIError:
         pass
