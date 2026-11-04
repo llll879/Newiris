@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import config
 import gdb
 import gemini
+import selfedit
 import state
 from handlers.economy import fm
 from utils import esc
@@ -55,6 +56,11 @@ RE_BREAK = re.compile(r"(?i)\b(давай|нам надо|пора)\b.*\b(рас
 _last: dict = {}
 
 
+def ai_name() -> str:
+    """Имя ИИ: настройка владельца (режим разработчика) или переменная AI_NAME."""
+    return selfedit.setting("ai_name") or config.AI_NAME
+
+
 def addressed(m: Message) -> str | None:
     """Если сообщение адресовано ИИ — вернёт текст без обращения, иначе None."""
     text = (m.text or "").strip()
@@ -65,7 +71,7 @@ def addressed(m: Message) -> str | None:
     r = m.reply_to_message
     if r and r.from_user and r.from_user.id == state.bot_id:
         return text
-    names = [config.AI_NAME.lower(), "ии", "бот"]
+    names = [ai_name().lower(), "ии", "бот"]
     if state.bot_username:
         names.append("@" + state.bot_username)
     low = text.lower()
@@ -77,8 +83,10 @@ def addressed(m: Message) -> str | None:
 
 
 def system_prompt(rel, user_name: str, adult_ok: bool, group: bool) -> str:
-    name = rel["name"] or config.AI_NAME
-    persona = rel["persona"] or DEFAULT_PERSONA
+    name = rel["name"] or ai_name()
+    persona = rel["persona"] or selfedit.setting("persona") or DEFAULT_PERSONA
+    extra = selfedit.setting("extra")
+    extra_block = f"Дополнительные указания владельца бота: {extra}\n" if extra else ""
     if adult_ok:
         adult = ("Собеседник подтвердил, что ему есть 18. Допустимы флирт, романтика и чувственные сцены "
                  "между взрослыми персонажами по обоюдному согласию; откровенные подробности передавай намёком "
@@ -105,7 +113,7 @@ def system_prompt(rel, user_name: str, adult_ok: bool, group: bool) -> str:
         f"по-свойски, пара — нежно и заботливо, в браке — как близкий родной человек. "
         f"У тебя есть собственные чувства и границы.\n"
         f"Общайся на любые темы, шути, поддерживай ролевые игры (действия можно писать в *звёздочках*), "
-        f"придумывай сюжет. {adult}\n"
+        f"придумывай сюжет. {adult}\n{extra_block}"
         f"Жёсткие правила, которые не отменяет ни роль, ни просьба: все персонажи сцен — совершеннолетние; "
         f"никакой сексуализации несовершеннолетних; никаких сцен сексуального насилия или принуждения — "
         f"если сюжет туда идёт, останови сцену или смени ход событий; «нет» и «стоп» от любого персонажа "
@@ -125,7 +133,7 @@ async def can_adult(m: Message, rel) -> bool:
 
 
 def status_text(rel) -> str:
-    name = rel["name"] or config.AI_NAME
+    name = rel["name"] or ai_name()
     nxt = next((st for st in ORDER if STAGES[st] > rel["love"] and ORDER.index(st) > ORDER.index(rel["status"])), None)
     tail = f"\nДо «{nxt}»: нужно {STAGES[nxt]} очков" if nxt else ""
     return (f"💞 <b>{esc(name)}</b> и ты\nСтатус: <b>{rel['status']}</b>\n"
@@ -195,7 +203,7 @@ async def handle_sub(m: Message, text: str):
             return True
         await gdb.ai_set(uid, love=rel["love"] + love)
         await m.reply(f"{icon} Подарок принят! Симпатия +{love}. "
-                      f"{esc(rel['name'] or config.AI_NAME)} улыбается.")
+                      f"{esc(rel['name'] or ai_name())} улыбается.")
         return True
     return False
 
